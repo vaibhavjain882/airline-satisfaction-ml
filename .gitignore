@@ -65,8 +65,8 @@ venv.bak/
 .DS_Store
 
 # CSV files (keep test_data.csv in root for app)
-*.csv
-!test_data.csv
+#*.csv
+#!test_data.csv
 
 # Models (include for deployment)
 
