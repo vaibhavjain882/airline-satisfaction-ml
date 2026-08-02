@@ -18,6 +18,10 @@ from sklearn.metrics import (
     classification_report,
     confusion_matrix,
     f1_score,
+    matthews_corrcoef,
+    precision_score,
+    recall_score,
+    roc_auc_score,
 )
 
 warnings.filterwarnings('ignore')
@@ -153,12 +157,18 @@ def run_inference(csv_bytes, model_name, data_source_label):
     probabilities = model.predict_proba(X_scaled)
 
     y_encoded = None
-    accuracy = None
-    f1 = None
+    live_metrics = None
     if has_labels:
         y_encoded = encode_target(df['satisfaction'], target_encoder)
-        accuracy = float(accuracy_score(y_encoded, predictions))
-        f1 = float(f1_score(y_encoded, predictions, average='weighted'))
+        y_proba = probabilities[:, 1]
+        live_metrics = {
+            'Accuracy': float(accuracy_score(y_encoded, predictions)),
+            'AUC': float(roc_auc_score(y_encoded, y_proba)),
+            'Precision': float(precision_score(y_encoded, predictions, average='weighted', zero_division=0)),
+            'Recall': float(recall_score(y_encoded, predictions, average='weighted', zero_division=0)),
+            'F1': float(f1_score(y_encoded, predictions, average='weighted', zero_division=0)),
+            'MCC': float(matthews_corrcoef(y_encoded, predictions)),
+        }
 
     return {
         'row_count': len(df),
@@ -167,8 +177,7 @@ def run_inference(csv_bytes, model_name, data_source_label):
         'predictions': predictions,
         'probabilities': probabilities,
         'y_encoded': y_encoded,
-        'accuracy': accuracy,
-        'f1': f1,
+        'live_metrics': live_metrics,
     }
 
 
@@ -262,44 +271,40 @@ tab1, tab2, tab3, tab4 = st.tabs([
 with tab1:
     st.header("Model Performance Metrics")
     st.caption(
-        "Pre-computed metrics from the 80-20 training holdout (~25,900 rows). "
-        "These do not change when you upload a different CSV."
+        f"Metrics computed on **{results['data_source']}** ({results['row_count']:,} records) — "
+        "same values as Confusion Matrix and Predictions tabs."
     )
 
-    model_metrics = metrics_df.loc[selected_model]
-    col1, col2, col3 = st.columns(3, gap="large")
+    if has_labels and results['live_metrics']:
+        model_metrics = results['live_metrics']
+        col1, col2, col3 = st.columns(3, gap="large")
 
-    with col1:
-        st.metric("Accuracy", f"{model_metrics['Accuracy']:.2%}")
-        st.metric("AUC Score", f"{model_metrics['AUC']:.4f}")
-    with col2:
-        st.metric("Precision", f"{model_metrics['Precision']:.4f}")
-        st.metric("Recall", f"{model_metrics['Recall']:.4f}")
-    with col3:
-        st.metric("F1 Score", f"{model_metrics['F1']:.4f}")
-        st.metric("MCC Score", f"{model_metrics['MCC']:.4f}")
+        with col1:
+            st.metric("Accuracy", f"{model_metrics['Accuracy']:.2%}")
+            st.metric("AUC Score", f"{model_metrics['AUC']:.4f}")
+        with col2:
+            st.metric("Precision", f"{model_metrics['Precision']:.4f}")
+            st.metric("Recall", f"{model_metrics['Recall']:.4f}")
+        with col3:
+            st.metric("F1 Score", f"{model_metrics['F1']:.4f}")
+            st.metric("MCC Score", f"{model_metrics['MCC']:.4f}")
+    else:
+        st.warning("Upload a CSV with a 'satisfaction' column to compute live metrics.")
+        model_metrics = metrics_df.loc[selected_model].to_dict()
+        col1, col2, col3 = st.columns(3, gap="large")
+        with col1:
+            st.metric("Accuracy", f"{model_metrics['Accuracy']:.2%}")
+            st.metric("AUC Score", f"{model_metrics['AUC']:.4f}")
+        with col2:
+            st.metric("Precision", f"{model_metrics['Precision']:.4f}")
+            st.metric("Recall", f"{model_metrics['Recall']:.4f}")
+        with col3:
+            st.metric("F1 Score", f"{model_metrics['F1']:.4f}")
+            st.metric("MCC Score", f"{model_metrics['MCC']:.4f}")
 
-    if has_labels and results['accuracy'] is not None:
-        st.markdown("---")
-        st.subheader("Live Accuracy on Current Dataset")
-        live_col1, live_col2 = st.columns(2)
-        with live_col1:
-            st.metric(
-                "Current Dataset Accuracy",
-                f"{results['accuracy']:.2%}",
-                help=f"Computed on {results['row_count']:,} rows from {results['data_source']}"
-            )
-        with live_col2:
-            stored = model_metrics['Accuracy']
-            delta = results['accuracy'] - stored
-            st.metric(
-                "Holdout Accuracy (training)",
-                f"{stored:.2%}",
-                delta=f"{delta:+.2%} vs current",
-                delta_color="off",
-            )
-
-    st.subheader("Comparison with Other Models")
+    st.markdown("---")
+    st.subheader("Training Holdout Comparison (all models)")
+    st.caption("Reference metrics from the 80-20 split used during model training (metrics.csv).")
     st.dataframe(metrics_df, width='stretch')
 
 with tab2:
@@ -318,8 +323,8 @@ with tab2:
         not_satisfied_count = int((predictions == 0).sum())
         st.metric("Not Satisfied", not_satisfied_count, f"{(not_satisfied_count / len(predictions)) * 100:.1f}%")
     with col4:
-        if has_labels:
-            st.metric("Accuracy", f"{results['accuracy']:.2%}")
+        if has_labels and results['live_metrics']:
+            st.metric("Accuracy", f"{results['live_metrics']['Accuracy']:.2%}")
         else:
             st.metric("Accuracy", "N/A")
 
@@ -389,9 +394,9 @@ with tab3:
             st.subheader("Classification Report")
             col2a, col2b = st.columns(2)
             with col2a:
-                st.metric("Accuracy", f"{results['accuracy']:.2%}")
+                st.metric("Accuracy", f"{results['live_metrics']['Accuracy']:.2%}")
             with col2b:
-                st.metric("F1-Score", f"{results['f1']:.4f}")
+                st.metric("F1-Score", f"{results['live_metrics']['F1']:.4f}")
 
             report = classification_report(
                 y_encoded,
@@ -407,8 +412,8 @@ with tab4:
     st.header("About This Project")
     st.markdown("""
     ### How to use this app
-    - **Model Metrics**: Pre-computed scores from model training (fixed holdout split).
-    - **Predictions / Confusion Matrix**: Results on the dataset you load (default 1000 rows or uploaded CSV).
+    - **Model Metrics**: Live scores on your loaded dataset (matches Confusion Matrix).
+    - **Training Holdout Comparison**: Reference table from model training (`metrics.csv`).
     - Upload `data/test.csv` from the repo for predictions on ~26,000 rows.
 
     ### Models Implemented
