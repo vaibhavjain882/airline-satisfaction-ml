@@ -2,27 +2,25 @@
 Airline Passenger Satisfaction Prediction App
 ==============================================
 Interactive Streamlit app to demonstrate ML classification models
-
-Features:
-1. Upload CSV file
-2. Select ML model
-3. Display evaluation metrics
-4. Show confusion matrix
 """
 
-import streamlit as st
-import pandas as pd
-import numpy as np
-import joblib
-from sklearn.metrics import confusion_matrix, classification_report, accuracy_score, f1_score
-import matplotlib.pyplot as plt
-import seaborn as sns
+import io
 import warnings
-warnings.filterwarnings('ignore')
 
-# ==============================================================================
-# PAGE CONFIGURATION
-# ==============================================================================
+import joblib
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import streamlit as st
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    confusion_matrix,
+    f1_score,
+)
+
+warnings.filterwarnings('ignore')
 
 st.set_page_config(
     page_title="Airline Satisfaction Prediction",
@@ -33,62 +31,54 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    h1, h2, h3 {
-        font-weight: bold;
-    }
+    h1, h2, h3 { font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
-# ==============================================================================
-# LOAD MODELS AND DATA
-# ==============================================================================
 
 @st.cache_resource
 def load_models():
-    """Load all trained models"""
-    models = {
+    return {
         'Logistic Regression': joblib.load('model/logistic_regression.pkl'),
         'Decision Tree': joblib.load('model/decision_tree.pkl'),
         'K-Nearest Neighbor': joblib.load('model/knn.pkl'),
         'Naive Bayes': joblib.load('model/naive_bayes.pkl'),
-        'Random Forest': joblib.load('model/random_forest.pkl')
+        'Random Forest': joblib.load('model/random_forest.pkl'),
     }
-    return models
+
 
 @st.cache_resource
 def load_scaler():
-    """Load the scaler"""
     return joblib.load('model/scaler.pkl')
+
 
 @st.cache_resource
 def load_label_encoders():
-    """Load feature label encoders from training"""
-    try:
-        return joblib.load('model/label_encoders.pkl')
-    except FileNotFoundError:
-        st.error("Missing model/label_encoders.pkl. Please push all model artifacts to GitHub and redeploy.")
-        st.stop()
+    return joblib.load('model/label_encoders.pkl')
+
 
 @st.cache_resource
 def load_target_encoder():
-    """Load target label encoder from training"""
-    try:
-        return joblib.load('model/label_encoder_target.pkl')
-    except FileNotFoundError:
-        st.error("Missing model/label_encoder_target.pkl. Please push all model artifacts to GitHub and redeploy.")
-        st.stop()
+    return joblib.load('model/label_encoder_target.pkl')
+
 
 @st.cache_resource
 def load_feature_columns():
-    """Load feature column order from training"""
-    try:
-        return joblib.load('model/feature_columns.pkl')
-    except FileNotFoundError:
-        st.error("Missing model/feature_columns.pkl. Please push all model artifacts to GitHub and redeploy.")
-        st.stop()
+    return joblib.load('model/feature_columns.pkl')
+
+
+@st.cache_data
+def load_metrics():
+    return pd.read_csv('model/metrics.csv', index_col=0)
+
+
+@st.cache_data
+def load_test_data():
+    return pd.read_csv('test_data.csv')
+
 
 def preprocess_features(X_data, label_encoders, feature_columns):
-    """Apply the same preprocessing used during model training."""
+    """Fast vectorized preprocessing matching model training."""
     X = X_data.copy()
 
     for col in ['Unnamed: 0', 'id']:
@@ -105,35 +95,26 @@ def preprocess_features(X_data, label_encoders, feature_columns):
         if col not in X.columns:
             continue
         if not pd.api.types.is_numeric_dtype(X[col]):
-            known_classes = {str(cls) for cls in encoder.classes_}
-            X[col] = (
-                X[col]
-                .astype(str)
-                .str.strip()
-                .apply(
-                    lambda value, enc=encoder, known=known_classes: float(enc.transform([value])[0])
-                    if value in known else -1.0
-                )
-            )
+            mapping = {
+                str(cls): float(encoder.transform([cls])[0])
+                for cls in encoder.classes_
+            }
+            X[col] = X[col].astype(str).str.strip().map(mapping).fillna(-1.0)
 
-    # Build a pure float64 numpy array (avoids pandas/sklearn dtype issues on Streamlit Cloud)
-    feature_matrix = np.zeros((len(X), len(feature_columns)), dtype=np.float64)
-    for idx, col in enumerate(feature_columns):
-        feature_matrix[:, idx] = pd.to_numeric(X[col], errors='coerce').fillna(0).to_numpy(dtype=np.float64)
+    return X.apply(pd.to_numeric, errors='coerce').fillna(0).to_numpy(dtype=np.float64)
 
-    return feature_matrix
 
 def encode_target(y_data, target_encoder):
     """Encode target labels using the same encoder from training."""
     if not pd.api.types.is_numeric_dtype(y_data):
-        known_classes = {str(cls) for cls in target_encoder.classes_}
+        mapping = {
+            str(cls): int(target_encoder.transform([cls])[0])
+            for cls in target_encoder.classes_
+        }
         return (
             y_data.astype(str)
             .str.strip()
-            .apply(
-                lambda value, enc=target_encoder, known=known_classes: enc.transform([value])[0]
-                if value in known else np.nan
-            )
+            .map(mapping)
             .fillna(0)
             .astype(int)
             .to_numpy()
@@ -141,318 +122,252 @@ def encode_target(y_data, target_encoder):
 
     return y_data.fillna(0).astype(int).to_numpy()
 
+
 def scale_features(scaler, feature_matrix):
-    """Convert features to a float64 numpy array for sklearn compatibility."""
     X = np.asarray(feature_matrix, dtype=np.float64)
     if X.ndim == 1:
         X = X.reshape(1, -1)
     return scaler.transform(np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0))
 
-@st.cache_data
-def load_metrics():
-    """Load metrics from CSV"""
-    return pd.read_csv('model/metrics.csv', index_col=0)
 
-@st.cache_data
-def load_test_data():
-    """Load test data"""
-    return pd.read_csv('test_data.csv')
+@st.cache_data(show_spinner=False)
+def run_inference(csv_bytes, model_name, data_source_label):
+    """Preprocess once and run the selected model (cached per file + model)."""
+    if csv_bytes == b"__default__":
+        df = load_test_data()
+    else:
+        df = pd.read_csv(io.BytesIO(csv_bytes))
 
-# Load all resources
+    label_encoders = load_label_encoders()
+    target_encoder = load_target_encoder()
+    feature_columns = load_feature_columns()
+    scaler = load_scaler()
+    model = load_models()[model_name]
+
+    has_labels = 'satisfaction' in df.columns
+    X_raw = df.drop('satisfaction', axis=1) if has_labels else df
+
+    X_features = preprocess_features(X_raw, label_encoders, feature_columns)
+    X_scaled = scale_features(scaler, X_features)
+    predictions = model.predict(X_scaled)
+    probabilities = model.predict_proba(X_scaled)
+
+    y_encoded = None
+    accuracy = None
+    f1 = None
+    if has_labels:
+        y_encoded = encode_target(df['satisfaction'], target_encoder)
+        accuracy = float(accuracy_score(y_encoded, predictions))
+        f1 = float(f1_score(y_encoded, predictions, average='weighted'))
+
+    return {
+        'row_count': len(df),
+        'data_source': data_source_label,
+        'has_labels': has_labels,
+        'predictions': predictions,
+        'probabilities': probabilities,
+        'y_encoded': y_encoded,
+        'accuracy': accuracy,
+        'f1': f1,
+    }
+
+
+# Load static resources
 models = load_models()
-scaler = load_scaler()
-label_encoders = load_label_encoders()
-target_encoder = load_target_encoder()
-feature_columns = load_feature_columns()
 metrics_df = load_metrics()
 test_data = load_test_data()
 
-# ==============================================================================
-# TITLE AND HEADER
-# ==============================================================================
-
 st.title("Airline Passenger Satisfaction Prediction")
-st.markdown("""
-This app demonstrates **5 ML classification models** trained to predict
-whether airline passengers are satisfied or not.
-""")
-
+st.markdown(
+    "This app demonstrates **5 ML classification models** trained to predict "
+    "whether airline passengers are satisfied or not."
+)
 st.divider()
-
-# ==============================================================================
-# SIDEBAR: FILE UPLOAD AND MODEL SELECTION
-# ==============================================================================
 
 with st.sidebar:
     st.markdown("## Configuration Panel")
     st.markdown("---")
-
-    # Data Source Section
     st.markdown("### Data Source")
+
     uploaded_file = st.file_uploader(
         "Upload a CSV file for predictions",
         type=['csv'],
-        help="CSV file should have 'satisfaction' column for comparison"
+        help="Default uses test_data.csv (1000 rows). Upload data/test.csv for ~26k rows."
     )
 
     if uploaded_file is not None:
-        data = pd.read_csv(uploaded_file)
-        st.success(f"File loaded: **{uploaded_file.name}**")
-        st.caption(f"Rows: {len(data)} | Columns: {len(data.columns)}")
+        csv_bytes = uploaded_file.getvalue()
+        data_source = uploaded_file.name
     else:
-        data = test_data.copy()
-        st.info("Using default test data")
-        st.caption(f"Rows: {len(data)} | Columns: {len(data.columns)}")
+        csv_bytes = b"__default__"
+        data_source = "test_data.csv (default sample)"
 
     st.markdown("---")
-
-    # Model Selection Section
     st.markdown("### Model Selection")
 
     model_descriptions = {
-        'Logistic Regression': '📈 Linear classification model',
-        'Decision Tree': '🌳 Tree-based non-linear model',
-        'K-Nearest Neighbor': '🔍 Instance-based learning',
-        'Naive Bayes': '🎯 Probabilistic classifier',
-        'Random Forest': '🎋 Ensemble of decision trees'
+        'Logistic Regression': 'Linear classification model',
+        'Decision Tree': 'Tree-based non-linear model',
+        'K-Nearest Neighbor': 'Instance-based learning',
+        'Naive Bayes': 'Probabilistic classifier',
+        'Random Forest': 'Ensemble of decision trees',
     }
 
-    selected_model = st.selectbox(
-        "Choose a model:",
-        list(models.keys()),
-        help="Select which ML model to use"
+    selected_model = st.selectbox("Choose a model:", list(models.keys()))
+
+    st.markdown(
+        f"**{selected_model}**  \n"
+        f"{model_descriptions.get(selected_model, '')}"
     )
 
-    # Model info card
-    st.markdown(f"""
-    <div style="background-color: #1f77b4; padding: 15px; border-radius: 8px; color: white;">
-        <p style="margin: 0; font-weight: bold; font-size: 16px;">{selected_model}</p>
-        <p style="margin: 5px 0 0 0; font-size: 13px;">{model_descriptions.get(selected_model, '')}</p>
-    </div>
-    """, unsafe_allow_html=True)
+with st.spinner("Processing data and generating predictions..."):
+    try:
+        results = run_inference(csv_bytes, selected_model, data_source)
+    except FileNotFoundError as exc:
+        st.error(f"Missing model artifact: {exc}. Push all model files to GitHub and redeploy.")
+        st.stop()
+    except ValueError as exc:
+        st.error(str(exc))
+        st.stop()
+    except Exception as exc:
+        st.error(f"Failed to process CSV: {exc}")
+        st.stop()
 
+predictions = results['predictions']
+probabilities = results['probabilities']
+y_encoded = results['y_encoded']
+has_labels = results['has_labels']
+
+with st.sidebar:
     st.markdown("---")
-
-    # Quick Stats
     st.markdown("### Dataset Info")
+    if uploaded_file is None:
+        st.info("Using default test data (1000 rows)")
+    else:
+        st.success(f"Loaded: {data_source}")
+
     col1, col2 = st.columns(2)
     with col1:
-        st.metric("Samples", len(data))
+        st.metric("Samples", f"{results['row_count']:,}")
     with col2:
-        st.metric("Features", len(data.columns))
-
-# ==============================================================================
-# MAIN CONTENT: TABS
-# ==============================================================================
+        st.metric("Model", selected_model.split()[0])
 
 tab1, tab2, tab3, tab4 = st.tabs([
     "Model Metrics",
     "Predictions",
     "Confusion Matrix",
-    "About"
+    "About",
 ])
-
-# ==============================================================================
-# TAB 1: DISPLAY EVALUATION METRICS (Feature 3)
-# ==============================================================================
 
 with tab1:
     st.header("Model Performance Metrics")
-    st.caption("Metrics below are from the 80-20 holdout test split used during model training.")
+    st.caption(
+        "Pre-computed metrics from the 80-20 training holdout (~25,900 rows). "
+        "These do not change when you upload a different CSV."
+    )
 
-    # Get metrics for selected model
     model_metrics = metrics_df.loc[selected_model]
-
-    # Display metrics in a grid layout
     col1, col2, col3 = st.columns(3, gap="large")
 
     with col1:
-        st.metric(
-            label="Accuracy",
-            value=f"{model_metrics['Accuracy']:.2%}",
-            help="Overall correctness of predictions"
-        )
-        st.metric(
-            label="AUC Score",
-            value=f"{model_metrics['AUC']:.4f}",
-            help="Class separation ability (0-1)"
-        )
-
+        st.metric("Accuracy", f"{model_metrics['Accuracy']:.2%}")
+        st.metric("AUC Score", f"{model_metrics['AUC']:.4f}")
     with col2:
-        st.metric(
-            label="Precision",
-            value=f"{model_metrics['Precision']:.4f}",
-            help="True positives / All positives"
-        )
-        st.metric(
-            label="Recall",
-            value=f"{model_metrics['Recall']:.4f}",
-            help="True positives / Actual positives"
-        )
-
+        st.metric("Precision", f"{model_metrics['Precision']:.4f}")
+        st.metric("Recall", f"{model_metrics['Recall']:.4f}")
     with col3:
-        st.metric(
-            label="F1 Score",
-            value=f"{model_metrics['F1']:.4f}",
-            help="Harmonic mean of Precision & Recall"
-        )
-        st.metric(
-            label="MCC Score",
-            value=f"{model_metrics['MCC']:.4f}",
-            help="Correlation coefficient (-1 to +1)"
-        )
+        st.metric("F1 Score", f"{model_metrics['F1']:.4f}")
+        st.metric("MCC Score", f"{model_metrics['MCC']:.4f}")
 
-    st.markdown("---")
+    if has_labels and results['accuracy'] is not None:
+        st.markdown("---")
+        st.subheader("Live Accuracy on Current Dataset")
+        live_col1, live_col2 = st.columns(2)
+        with live_col1:
+            st.metric(
+                "Current Dataset Accuracy",
+                f"{results['accuracy']:.2%}",
+                help=f"Computed on {results['row_count']:,} rows from {results['data_source']}"
+            )
+        with live_col2:
+            stored = model_metrics['Accuracy']
+            delta = results['accuracy'] - stored
+            st.metric(
+                "Holdout Accuracy (training)",
+                f"{stored:.2%}",
+                delta=f"{delta:+.2%} vs current",
+                delta_color="off",
+            )
 
-    # Explanation of metrics
-    with st.expander("What do these metrics mean?"):
-        st.markdown("""
-        - **Accuracy**: Percentage of correct predictions overall
-        - **AUC Score**: Area Under ROC Curve (0-1, higher is better)
-        - **Precision**: Of positive predictions, how many were correct?
-        - **Recall**: Of actual positives, how many did we find?
-        - **F1 Score**: Harmonic mean of Precision and Recall
-        - **MCC**: Matthews Correlation Coefficient (-1 to +1)
-        """)
-
-    # Display all metrics comparison
     st.subheader("Comparison with Other Models")
     st.dataframe(metrics_df, width='stretch')
 
-# ==============================================================================
-# TAB 2: MAKE PREDICTIONS
-# ==============================================================================
-
 with tab2:
     st.header("Make Predictions")
-
     st.markdown(f"**Model:** {selected_model}")
+    st.caption(f"Active dataset: **{results['data_source']}** ({results['row_count']:,} records)")
 
-    # Separate features and target
-    if 'satisfaction' in data.columns:
-        X_data = data.drop('satisfaction', axis=1)
-        y_data = data['satisfaction']
-        has_labels = True
-    else:
-        X_data = data
-        has_labels = False
-
-    # Make a copy to avoid modifying original
-    try:
-        X_features = preprocess_features(X_data, label_encoders, feature_columns)
-    except ValueError as e:
-        st.error(str(e))
-        st.stop()
-
-    X_scaled = scale_features(scaler, X_features)
-
-    model = models[selected_model]
-    predictions = model.predict(X_scaled)
-    probabilities = model.predict_proba(X_scaled)
-
-    # Display predictions summary with better formatting
     st.markdown("### Prediction Summary")
-
-    col1, col2, col3 = st.columns(3, gap="large")
+    col1, col2, col3, col4 = st.columns(4, gap="large")
     with col1:
         st.metric("Total Samples", f"{len(predictions):,}")
     with col2:
         satisfied_count = int((predictions == 1).sum())
-        satisfied_pct = (satisfied_count / len(predictions)) * 100
-        st.metric("Satisfied", satisfied_count, f"{satisfied_pct:.1f}%")
+        st.metric("Satisfied", satisfied_count, f"{(satisfied_count / len(predictions)) * 100:.1f}%")
     with col3:
         not_satisfied_count = int((predictions == 0).sum())
-        not_satisfied_pct = (not_satisfied_count / len(predictions)) * 100
-        st.metric("Not Satisfied", not_satisfied_count, f"{not_satisfied_pct:.1f}%")
+        st.metric("Not Satisfied", not_satisfied_count, f"{(not_satisfied_count / len(predictions)) * 100:.1f}%")
+    with col4:
+        if has_labels:
+            st.metric("Accuracy", f"{results['accuracy']:.2%}")
+        else:
+            st.metric("Accuracy", "N/A")
 
     st.markdown("---")
-
-    # Display predictions table
     st.subheader("Detailed Predictions")
+
     results_df = pd.DataFrame({
-        'Satisfied_Probability': probabilities[:, 1],
-        'Not_Satisfied_Probability': probabilities[:, 0],
-        'Prediction': ['Satisfied' if p == 1 else 'Not Satisfied' for p in predictions]
+        'Satisfied_Probability': probabilities[:, 1].round(4),
+        'Not_Satisfied_Probability': probabilities[:, 0].round(4),
+        'Prediction': np.where(predictions == 1, 'Satisfied', 'Not Satisfied'),
     })
 
     if has_labels:
-        try:
-            y_data_for_comparison = encode_target(y_data, target_encoder)
-            results_df['Actual'] = [
-                'Satisfied' if label == 1 else 'Not Satisfied'
-                for label in y_data_for_comparison
-            ]
-            results_df['Correct'] = predictions == y_data_for_comparison
-        except Exception as e:
-            st.warning(f"Could not compare with actual values: {str(e)}")
+        results_df.insert(0, 'Actual', np.where(y_encoded == 1, 'Satisfied', 'Not Satisfied'))
+        results_df['Correct'] = predictions == y_encoded
 
-    st.dataframe(results_df, width='stretch')
-
-# ==============================================================================
-# TAB 3: CONFUSION MATRIX (Feature 4)
-# ==============================================================================
+    display_limit = 200
+    if len(results_df) > display_limit:
+        st.caption(f"Showing first {display_limit} of {len(results_df):,} rows for faster loading.")
+        st.dataframe(results_df.head(display_limit), width='stretch', height=400)
+    else:
+        st.dataframe(results_df, width='stretch', height=400)
 
 with tab3:
     st.header("Confusion Matrix & Classification Report")
+    st.caption(f"Active dataset: **{results['data_source']}** ({results['row_count']:,} records)")
 
-    st.info("Confusion Matrix and Classification Report are computed on the currently loaded dataset (default test data or uploaded CSV).")
+    if has_labels:
+        cm = confusion_matrix(y_encoded, predictions)
 
-    # Check if we have labels
-    if 'satisfaction' in data.columns:
-        X_data = data.drop('satisfaction', axis=1)
-        y_data = data['satisfaction']
-
-        try:
-            X_features = preprocess_features(X_data, label_encoders, feature_columns)
-        except ValueError as e:
-            st.error(str(e))
-            st.stop()
-
-        try:
-            y_data_encoded = encode_target(y_data, target_encoder)
-        except Exception as e:
-            st.error(f"Error encoding satisfaction column: {str(e)}")
-            st.info("Please ensure the 'satisfaction' column contains 'satisfied' or 'neutral or dissatisfied' values.")
-            st.stop()
-
-        # Scale and predict
-        X_scaled = scale_features(scaler, X_features)
-        model = models[selected_model]
-        predictions = model.predict(X_scaled)
-
-        # Calculate confusion matrix
-        cm = confusion_matrix(y_data_encoded, predictions)
-
-        # Display sample count information
         st.markdown("### Sample Count Summary")
-        total_samples = len(y_data_encoded)
-        true_negatives = cm[0, 0]
-        false_positives = cm[0, 1]
-        false_negatives = cm[1, 0]
-        true_positives = cm[1, 1]
-
         col_counts = st.columns(5)
         with col_counts[0]:
-            st.metric("Total Samples", f"{total_samples:,}")
+            st.metric("Total Samples", f"{len(y_encoded):,}")
         with col_counts[1]:
-            st.metric("True Negatives", f"{true_negatives:,}")
+            st.metric("True Negatives", f"{cm[0, 0]:,}")
         with col_counts[2]:
-            st.metric("False Positives", f"{false_positives:,}")
+            st.metric("False Positives", f"{cm[0, 1]:,}")
         with col_counts[3]:
-            st.metric("False Negatives", f"{false_negatives:,}")
+            st.metric("False Negatives", f"{cm[1, 0]:,}")
         with col_counts[4]:
-            st.metric("True Positives", f"{true_positives:,}")
+            st.metric("True Positives", f"{cm[1, 1]:,}")
 
-        st.markdown("---")
-
-        # Plot confusion matrix
         col1, col2 = st.columns([1, 1])
 
         with col1:
             st.subheader("Confusion Matrix")
-            fig, ax = plt.subplots(figsize=(10, 8))
-
-            # Create heatmap with white background for visibility
+            fig, ax = plt.subplots(figsize=(8, 6))
             sns.heatmap(
                 cm,
                 annot=True,
@@ -462,90 +377,48 @@ with tab3:
                 yticklabels=['Not Satisfied', 'Satisfied'],
                 ax=ax,
                 cbar_kws={'label': 'Count'},
-                annot_kws={'size': 18, 'weight': 'bold'},
-                linewidths=2,
-                linecolor='white'
+                annot_kws={'size': 14, 'weight': 'bold'},
             )
-
-            ax.set_xlabel('Predicted Label', fontsize=13, fontweight='bold')
-            ax.set_ylabel('True Label', fontsize=13, fontweight='bold')
-            ax.set_title(f'Confusion Matrix - {selected_model}', fontsize=15, fontweight='bold', pad=15)
-            ax.tick_params(axis='both', labelsize=12)
-
-            fig.patch.set_facecolor('white')
-            ax.set_facecolor('white')
-
-            plt.tight_layout()
+            ax.set_xlabel('Predicted Label', fontweight='bold')
+            ax.set_ylabel('True Label', fontweight='bold')
+            ax.set_title(f'Confusion Matrix - {selected_model}', fontweight='bold')
             st.pyplot(fig)
+            plt.close(fig)
 
         with col2:
             st.subheader("Classification Report")
+            col2a, col2b = st.columns(2)
+            with col2a:
+                st.metric("Accuracy", f"{results['accuracy']:.2%}")
+            with col2b:
+                st.metric("F1-Score", f"{results['f1']:.4f}")
 
             report = classification_report(
-                y_data_encoded,
+                y_encoded,
                 predictions,
                 target_names=['Not Satisfied', 'Satisfied'],
-                output_dict=True
+                output_dict=True,
             )
-            report_df = pd.DataFrame(report).transpose()
-
-            computed_accuracy = accuracy_score(y_data_encoded, predictions)
-            computed_f1 = f1_score(y_data_encoded, predictions, average='weighted')
-
-            col2a, col2b = st.columns([1, 1])
-            with col2a:
-                st.metric("Accuracy", f"{computed_accuracy:.2%}")
-                st.caption("On current dataset")
-            with col2b:
-                st.metric("F1-Score", f"{computed_f1:.4f}")
-                st.caption("On current dataset")
-
-            st.dataframe(report_df, width='stretch')
+            st.dataframe(pd.DataFrame(report).transpose(), width='stretch')
     else:
-        st.warning("Please upload a CSV file with 'satisfaction' column to see confusion matrix")
-
-# ==============================================================================
-# TAB 4: ABOUT
-# ==============================================================================
+        st.warning("Upload a CSV with a 'satisfaction' column to view the confusion matrix.")
 
 with tab4:
     st.header("About This Project")
-
     st.markdown("""
-    ### Project Overview
-    This is an ML assignment that demonstrates end-to-end machine learning:
-    - **Dataset**: Airline Passenger Satisfaction
-    - **Task**: Binary Classification
-    - **Models**: 5 different algorithms
-    - **Metrics**: 6 evaluation metrics per model
+    ### How to use this app
+    - **Model Metrics**: Pre-computed scores from model training (fixed holdout split).
+    - **Predictions / Confusion Matrix**: Results on the dataset you load (default 1000 rows or uploaded CSV).
+    - Upload `data/test.csv` from the repo for predictions on ~26,000 rows.
 
     ### Models Implemented
-    1. **Logistic Regression**: Linear classification model
-    2. **Decision Tree**: Tree-based non-linear model
-    3. **K-Nearest Neighbor**: Instance-based learning
-    4. **Naive Bayes**: Probabilistic classifier
-    5. **Random Forest**: Ensemble of decision trees
+    1. Logistic Regression
+    2. Decision Tree
+    3. K-Nearest Neighbor
+    4. Naive Bayes
+    5. Random Forest
 
-    ### Dataset Information
-    - **Samples**: 129,880 airline passengers
-    - **Features**: 22 predictive features (mix of numerical and categorical)
-    - **Target**: Satisfaction (0 = Not Satisfied, 1 = Satisfied)
-    - **Features Include**: Age, Flight Distance, Type of Travel, Cabin Class, etc.
-
-    ### Evaluation Metrics
-    - **Accuracy**: Overall correctness
-    - **AUC Score**: Discriminative ability
-    - **Precision**: Correctness of positive predictions
-    - **Recall**: Ability to find all actual positives
-    - **F1 Score**: Balance between precision and recall
-    - **MCC**: Correlation coefficient
-
-    ### Technologies Used
-    - **Python**: Programming language
-    - **Scikit-learn**: ML library
-    - **Streamlit**: Web framework
-    - **Pandas**: Data manipulation
-    - **Matplotlib & Seaborn**: Visualization
-    """)
-
-
+    ### Dataset
+    - 22 predictive features, binary satisfaction target
+    - Default sample: 1,000 rows (`test_data.csv`)
+  """)
