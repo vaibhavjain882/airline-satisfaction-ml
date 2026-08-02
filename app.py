@@ -95,34 +95,51 @@ def preprocess_features(X_data, label_encoders, feature_columns):
         if col in X.columns:
             X = X.drop(columns=col)
 
-    for col, encoder in label_encoders.items():
-        if col not in X.columns:
-            continue
-        # Encode string/categorical columns (object, string, or category dtypes)
-        if not pd.api.types.is_numeric_dtype(X[col]):
-            known_classes = set(encoder.classes_)
-            X[col] = X[col].apply(
-                lambda value: encoder.transform([value])[0]
-                if value in known_classes else -1
-            )
-
     missing_columns = [col for col in feature_columns if col not in X.columns]
     if missing_columns:
         raise ValueError(f"Missing required columns: {missing_columns}")
 
-    X = X[feature_columns].apply(pd.to_numeric, errors='coerce').fillna(0).astype(float)
-    return X
+    X = X[feature_columns].copy()
+
+    for col, encoder in label_encoders.items():
+        if col not in X.columns:
+            continue
+        if not pd.api.types.is_numeric_dtype(X[col]):
+            known_classes = {str(cls) for cls in encoder.classes_}
+            X[col] = (
+                X[col]
+                .astype(str)
+                .str.strip()
+                .apply(
+                    lambda value, enc=encoder, known=known_classes: float(enc.transform([value])[0])
+                    if value in known else -1.0
+                )
+            )
+
+    # Build a pure float64 numpy array (avoids pandas/sklearn dtype issues on Streamlit Cloud)
+    feature_matrix = np.zeros((len(X), len(feature_columns)), dtype=np.float64)
+    for idx, col in enumerate(feature_columns):
+        feature_matrix[:, idx] = pd.to_numeric(X[col], errors='coerce').fillna(0).to_numpy(dtype=np.float64)
+
+    return feature_matrix
 
 def encode_target(y_data, target_encoder):
     """Encode target labels using the same encoder from training."""
     if not pd.api.types.is_numeric_dtype(y_data):
-        known_classes = set(target_encoder.classes_)
-        return y_data.apply(
-            lambda value: target_encoder.transform([value])[0]
-            if value in known_classes else np.nan
-        ).fillna(0).astype(int)
+        known_classes = {str(cls) for cls in target_encoder.classes_}
+        return (
+            y_data.astype(str)
+            .str.strip()
+            .apply(
+                lambda value, enc=target_encoder, known=known_classes: enc.transform([value])[0]
+                if value in known else np.nan
+            )
+            .fillna(0)
+            .astype(int)
+            .to_numpy()
+        )
 
-    return y_data.fillna(0).astype(int)
+    return y_data.fillna(0).astype(int).to_numpy()
 
 @st.cache_data
 def load_metrics():
@@ -315,12 +332,12 @@ with tab2:
 
     # Make a copy to avoid modifying original
     try:
-        X_data = preprocess_features(X_data, label_encoders, feature_columns)
+        X_features = preprocess_features(X_data, label_encoders, feature_columns)
     except ValueError as e:
         st.error(str(e))
         st.stop()
 
-    X_scaled = scaler.transform(X_data)
+    X_scaled = scaler.transform(X_features)
 
     model = models[selected_model]
     predictions = model.predict(X_scaled)
@@ -379,7 +396,7 @@ with tab3:
         y_data = data['satisfaction']
 
         try:
-            X_data = preprocess_features(X_data, label_encoders, feature_columns)
+            X_features = preprocess_features(X_data, label_encoders, feature_columns)
         except ValueError as e:
             st.error(str(e))
             st.stop()
@@ -392,7 +409,7 @@ with tab3:
             st.stop()
 
         # Scale and predict
-        X_scaled = scaler.transform(X_data)
+        X_scaled = scaler.transform(X_features)
         model = models[selected_model]
         predictions = model.predict(X_scaled)
 
