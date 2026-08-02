@@ -141,6 +141,13 @@ def encode_target(y_data, target_encoder):
 
     return y_data.fillna(0).astype(int).to_numpy()
 
+def scale_features(scaler, feature_matrix):
+    """Convert features to a float64 numpy array for sklearn compatibility."""
+    X = np.asarray(feature_matrix, dtype=np.float64)
+    if X.ndim == 1:
+        X = X.reshape(1, -1)
+    return scaler.transform(np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0))
+
 @st.cache_data
 def load_metrics():
     """Load metrics from CSV"""
@@ -337,7 +344,7 @@ with tab2:
         st.error(str(e))
         st.stop()
 
-    X_scaled = scaler.transform(X_features)
+    X_scaled = scale_features(scaler, X_features)
 
     model = models[selected_model]
     predictions = model.predict(X_scaled)
@@ -409,7 +416,7 @@ with tab3:
             st.stop()
 
         # Scale and predict
-        X_scaled = scaler.transform(X_features)
+        X_scaled = scale_features(scaler, X_features)
         model = models[selected_model]
         predictions = model.predict(X_scaled)
 
