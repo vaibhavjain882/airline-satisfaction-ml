@@ -63,17 +63,29 @@ def load_scaler():
 @st.cache_resource
 def load_label_encoders():
     """Load feature label encoders from training"""
-    return joblib.load('model/label_encoders.pkl')
+    try:
+        return joblib.load('model/label_encoders.pkl')
+    except FileNotFoundError:
+        st.error("Missing model/label_encoders.pkl. Please push all model artifacts to GitHub and redeploy.")
+        st.stop()
 
 @st.cache_resource
 def load_target_encoder():
     """Load target label encoder from training"""
-    return joblib.load('model/label_encoder_target.pkl')
+    try:
+        return joblib.load('model/label_encoder_target.pkl')
+    except FileNotFoundError:
+        st.error("Missing model/label_encoder_target.pkl. Please push all model artifacts to GitHub and redeploy.")
+        st.stop()
 
 @st.cache_resource
 def load_feature_columns():
     """Load feature column order from training"""
-    return joblib.load('model/feature_columns.pkl')
+    try:
+        return joblib.load('model/feature_columns.pkl')
+    except FileNotFoundError:
+        st.error("Missing model/feature_columns.pkl. Please push all model artifacts to GitHub and redeploy.")
+        st.stop()
 
 def preprocess_features(X_data, label_encoders, feature_columns):
     """Apply the same preprocessing used during model training."""
@@ -86,7 +98,8 @@ def preprocess_features(X_data, label_encoders, feature_columns):
     for col, encoder in label_encoders.items():
         if col not in X.columns:
             continue
-        if X[col].dtype == 'object':
+        # Encode string/categorical columns (object, string, or category dtypes)
+        if not pd.api.types.is_numeric_dtype(X[col]):
             known_classes = set(encoder.classes_)
             X[col] = X[col].apply(
                 lambda value: encoder.transform([value])[0]
@@ -97,12 +110,12 @@ def preprocess_features(X_data, label_encoders, feature_columns):
     if missing_columns:
         raise ValueError(f"Missing required columns: {missing_columns}")
 
-    X = X[feature_columns].fillna(0)
+    X = X[feature_columns].apply(pd.to_numeric, errors='coerce').fillna(0).astype(float)
     return X
 
 def encode_target(y_data, target_encoder):
     """Encode target labels using the same encoder from training."""
-    if y_data.dtype == 'object' or str(y_data.dtype) == 'string':
+    if not pd.api.types.is_numeric_dtype(y_data):
         known_classes = set(target_encoder.classes_)
         return y_data.apply(
             lambda value: target_encoder.transform([value])[0]
