@@ -56,6 +56,7 @@ The goal is to develop multiple classification models and compare their performa
 
 **Data Preprocessing:**
 - Removed rows with missing values
+- Dropped non-predictive columns (`Unnamed: 0`, `id`)
 - Encoded categorical variables using LabelEncoder
 - Scaled numerical features using StandardScaler
 - Applied 80-20 train-test split with stratification
@@ -84,6 +85,9 @@ airline-satisfaction-project/
 │   ├── naive_bayes.pkl             # Naive Bayes Classifier
 │   ├── random_forest.pkl           # Random Forest Classifier
 │   ├── scaler.pkl                  # StandardScaler for features
+│   ├── label_encoders.pkl          # Feature encoders from training
+│   ├── label_encoder_target.pkl    # Target encoder from training
+│   ├── feature_columns.pkl         # Feature column order from training
 │   └── metrics.csv                 # All metrics in CSV
 │
 └── data/
@@ -101,17 +105,17 @@ Five machine learning classification models were implemented and evaluated on th
 
 | ML Model Name | Accuracy | AUC | Precision | Recall | F1 | MCC |
 |---|---|---|---|---|---|---|
-| Logistic Regression | 0.8650 | 0.9234 | 0.8612 | 0.8650 | 0.8625 | 0.7301 |
-| Decision Tree | 0.9185 | 0.9180 | 0.9178 | 0.9185 | 0.9181 | 0.8371 |
-| K-Nearest Neighbor | 0.9287 | 0.9674 | 0.9285 | 0.9287 | 0.9286 | 0.8575 |
-| Naive Bayes | 0.8356 | 0.8945 | 0.8312 | 0.8356 | 0.8329 | 0.6706 |
-| Random Forest | 0.9645 | 0.9952 | 0.9644 | 0.9645 | 0.9644 | 0.9291 |
+| Logistic Regression | 0.8740 | 0.9267 | 0.8739 | 0.8740 | 0.8737 | 0.7429 |
+| Decision Tree | 0.9471 | 0.9466 | 0.9472 | 0.9471 | 0.9472 | 0.8925 |
+| K-Nearest Neighbor | 0.9289 | 0.9716 | 0.9299 | 0.9289 | 0.9285 | 0.8557 |
+| Naive Bayes | 0.8652 | 0.9230 | 0.8651 | 0.8652 | 0.8649 | 0.7249 |
+| Random Forest | 0.9623 | 0.9942 | 0.9626 | 0.9623 | 0.9622 | 0.9234 |
 
 ### Model Observations and Analysis
 
 #### 1. **Logistic Regression**
 **Observation:** 
-Logistic Regression achieved 86.50% accuracy with an AUC of 0.9234. This model assumes a linear relationship between features and the target variable. The model is fast to train and provides interpretable coefficients for understanding feature importance. However, it underperforms compared to more complex models, suggesting that the airline satisfaction problem has some non-linear patterns. The MCC score of 0.7301 indicates a moderate correlation between predictions and actual values.
+Logistic Regression achieved 87.40% accuracy with an AUC of 0.9267. This model assumes a linear relationship between features and the target variable. The model is fast to train and provides interpretable coefficients for understanding feature importance. However, it underperforms compared to more complex models, suggesting that the airline satisfaction problem has some non-linear patterns. The MCC score of 0.7429 indicates a moderate correlation between predictions and actual values.
 
 **Why:** Linear models struggle when decision boundaries are complex. Airline satisfaction likely depends on non-linear interactions between service factors.
 
@@ -119,7 +123,7 @@ Logistic Regression achieved 86.50% accuracy with an AUC of 0.9234. This model a
 
 #### 2. **Decision Tree Classifier**
 **Observation:**
-Decision Tree achieved 91.85% accuracy with an AUC of 0.9180. Trees are excellent at capturing non-linear relationships and interactions between features. This model is highly interpretable - we can visualize the decision rules. However, decision trees are prone to overfitting on training data. The moderate F1 score (0.9181) suggests the model maintains balance between precision and recall. MCC of 0.8371 shows strong correlation.
+Decision Tree achieved 94.71% accuracy with an AUC of 0.9466. Trees are excellent at capturing non-linear relationships and interactions between features. This model is highly interpretable - we can visualize the decision rules. However, decision trees are prone to overfitting on training data. The strong F1 score (0.9472) suggests the model maintains balance between precision and recall. MCC of 0.8925 shows strong correlation.
 
 **Why:** Trees excel at finding feature interactions but need pruning to avoid overfitting. The improvement over Logistic Regression indicates non-linear patterns exist in the data.
 
@@ -127,7 +131,7 @@ Decision Tree achieved 91.85% accuracy with an AUC of 0.9180. Trees are excellen
 
 #### 3. **K-Nearest Neighbor (KNN)**
 **Observation:**
-KNN achieved 92.87% accuracy with the highest AUC of 0.9674 among traditional models. This instance-based learner works by finding the K nearest neighbors and using their majority class. KNN performs well because airline satisfaction likely has local patterns - passengers with similar profiles tend to have similar satisfaction levels. The high AUC (0.9674) indicates excellent separation between classes. MCC of 0.8575 confirms strong predictive power. The model's strength lies in capturing local patterns without making assumptions about the underlying distribution.
+KNN achieved 92.89% accuracy with a high AUC of 0.9716. This instance-based learner works by finding the K nearest neighbors and using their majority class. KNN performs well because airline satisfaction likely has local patterns - passengers with similar profiles tend to have similar satisfaction levels. The high AUC (0.9716) indicates excellent separation between classes. MCC of 0.8557 confirms strong predictive power. The model's strength lies in capturing local patterns without making assumptions about the underlying distribution.
 
 **Why:** KNN works well when similar passengers cluster together in feature space. The high AUC confirms good class separation. Requires feature scaling (which we applied).
 
@@ -135,7 +139,7 @@ KNN achieved 92.87% accuracy with the highest AUC of 0.9674 among traditional mo
 
 #### 4. **Naive Bayes Classifier**
 **Observation:**
-Naive Bayes achieved 83.56% accuracy with AUC of 0.8945. This probabilistic model assumes feature independence, which is a strong assumption not always true in real-world data. Service ratings (wifi, food, seat comfort) are likely correlated with each other, violating this assumption. Despite this limitation, the model still performs reasonably well, suggesting that some features are indeed independently informative. The lower F1 score (0.8329) and MCC (0.6706) indicate this is the weakest model for this problem. However, Naive Bayes is very fast to train and good for baseline comparisons.
+Naive Bayes achieved 86.52% accuracy with AUC of 0.9230. This probabilistic model assumes feature independence, which is a strong assumption not always true in real-world data. Service ratings (wifi, food, seat comfort) are likely correlated with each other, violating this assumption. Despite this limitation, the model still performs reasonably well, suggesting that some features are indeed independently informative. The lower F1 score (0.8649) and MCC (0.7249) indicate this is the weakest model for this problem. However, Naive Bayes is very fast to train and good for baseline comparisons.
 
 **Why:** The assumption of feature independence is violated when multiple service aspects are correlated. For example, good seat comfort often correlates with good overall service.
 
@@ -143,7 +147,7 @@ Naive Bayes achieved 83.56% accuracy with AUC of 0.8945. This probabilistic mode
 
 #### 5. **Random Forest (Ensemble)**
 **Observation:**
-Random Forest is the clear winner with **96.45% accuracy** and an exceptional **AUC of 0.9952**. This ensemble method combines multiple decision trees to reduce overfitting and improve generalization. The model achieves the highest scores across all metrics - Precision: 0.9644, Recall: 0.9645, F1: 0.9644, MCC: 0.9291. The near-perfect balance between precision and recall (both ~96.45%) indicates the model is excellent at both correctly identifying satisfied passengers and correctly identifying dissatisfied ones. The extraordinarily high AUC (0.9952) suggests nearly perfect class separation.
+Random Forest is the clear winner with **96.23% accuracy** and an exceptional **AUC of 0.9942**. This ensemble method combines multiple decision trees to reduce overfitting and improve generalization. The model achieves the highest scores across all metrics - Precision: 0.9626, Recall: 0.9623, F1: 0.9622, MCC: 0.9234. The near-perfect balance between precision and recall (both ~96.23%) indicates the model is excellent at both correctly identifying satisfied passengers and correctly identifying dissatisfied ones. The extraordinarily high AUC (0.9942) suggests near-perfect class separation.
 
 **Why:** Ensemble methods aggregate weak learners into a strong model. Random Forest's strength comes from:
 - Multiple trees voting on predictions
@@ -157,9 +161,9 @@ Random Forest is the clear winner with **96.45% accuracy** and an exceptional **
 
 The Random Forest model is the clear winner for this airline satisfaction prediction task because:
 
-1. **Highest Accuracy (96.45%)**: Correctly predicts satisfaction for 96+ out of 100 passengers
-2. **Exceptional AUC (0.9952)**: Almost perfect ability to distinguish between satisfied and dissatisfied passengers
-3. **Perfect Balance**: Precision and Recall are nearly identical (0.9644 and 0.9645), meaning equally good at avoiding false positives and false negatives
+1. **Highest Accuracy (96.23%)**: Correctly predicts satisfaction for 96+ out of 100 passengers
+2. **Exceptional AUC (0.9942)**: Almost perfect ability to distinguish between satisfied and dissatisfied passengers
+3. **Perfect Balance**: Precision and Recall are nearly identical (0.9626 and 0.9623), meaning equally good at avoiding false positives and false negatives
 4. **Best Generalization**: Ensemble approach reduces overfitting risk
 5. **Robustness**: Works well with both numerical and categorical features without special tuning
 
@@ -175,8 +179,8 @@ The Random Forest model is the clear winner for this airline satisfaction predic
 
 1. **Clone the repository:**
    ```bash
-   git clone <your-repository-url>
-   cd airline-satisfaction-project
+   git clone https://github.com/vaibhavjain882/airline-satisfaction-ml.git
+   cd airline-satisfaction-ml
    ```
 
 2. **Install dependencies:**

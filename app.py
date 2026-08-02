@@ -14,8 +14,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import joblib
-from sklearn.preprocessing import LabelEncoder
-from sklearn.metrics import confusion_matrix, classification_report
+from sklearn.metrics import confusion_matrix, classification_report, accuracy_score, f1_score
 import matplotlib.pyplot as plt
 import seaborn as sns
 import warnings
@@ -61,6 +60,57 @@ def load_scaler():
     """Load the scaler"""
     return joblib.load('model/scaler.pkl')
 
+@st.cache_resource
+def load_label_encoders():
+    """Load feature label encoders from training"""
+    return joblib.load('model/label_encoders.pkl')
+
+@st.cache_resource
+def load_target_encoder():
+    """Load target label encoder from training"""
+    return joblib.load('model/label_encoder_target.pkl')
+
+@st.cache_resource
+def load_feature_columns():
+    """Load feature column order from training"""
+    return joblib.load('model/feature_columns.pkl')
+
+def preprocess_features(X_data, label_encoders, feature_columns):
+    """Apply the same preprocessing used during model training."""
+    X = X_data.copy()
+
+    for col in ['Unnamed: 0', 'id']:
+        if col in X.columns:
+            X = X.drop(columns=col)
+
+    for col, encoder in label_encoders.items():
+        if col not in X.columns:
+            continue
+        if X[col].dtype == 'object':
+            known_classes = set(encoder.classes_)
+            X[col] = X[col].apply(
+                lambda value: encoder.transform([value])[0]
+                if value in known_classes else -1
+            )
+
+    missing_columns = [col for col in feature_columns if col not in X.columns]
+    if missing_columns:
+        raise ValueError(f"Missing required columns: {missing_columns}")
+
+    X = X[feature_columns].fillna(0)
+    return X
+
+def encode_target(y_data, target_encoder):
+    """Encode target labels using the same encoder from training."""
+    if y_data.dtype == 'object' or str(y_data.dtype) == 'string':
+        known_classes = set(target_encoder.classes_)
+        return y_data.apply(
+            lambda value: target_encoder.transform([value])[0]
+            if value in known_classes else np.nan
+        ).fillna(0).astype(int)
+
+    return y_data.fillna(0).astype(int)
+
 @st.cache_data
 def load_metrics():
     """Load metrics from CSV"""
@@ -74,6 +124,9 @@ def load_test_data():
 # Load all resources
 models = load_models()
 scaler = load_scaler()
+label_encoders = load_label_encoders()
+target_encoder = load_target_encoder()
+feature_columns = load_feature_columns()
 metrics_df = load_metrics()
 test_data = load_test_data()
 
@@ -168,6 +221,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
 
 with tab1:
     st.header("Model Performance Metrics")
+    st.caption("Metrics below are from the 80-20 holdout test split used during model training.")
 
     # Get metrics for selected model
     model_metrics = metrics_df.loc[selected_model]
@@ -247,22 +301,12 @@ with tab2:
         has_labels = False
 
     # Make a copy to avoid modifying original
-    X_data = X_data.copy()
+    try:
+        X_data = preprocess_features(X_data, label_encoders, feature_columns)
+    except ValueError as e:
+        st.error(str(e))
+        st.stop()
 
-    # Encode categorical variables (same as training)
-    categorical_columns = ['Gender', 'Customer Type', 'Type of Travel', 'Class']
-    for col in categorical_columns:
-        if col in X_data.columns:
-            if col == 'Gender':
-                X_data[col] = X_data[col].map({'Male': 0, 'Female': 1})
-            elif col == 'Customer Type':
-                X_data[col] = X_data[col].map({'Loyal Customer': 0, 'disloyal Customer': 1})
-            elif col == 'Type of Travel':
-                X_data[col] = X_data[col].map({'Personal Travel': 0, 'Business travel': 1})
-            elif col == 'Class':
-                X_data[col] = X_data[col].map({'Eco': 0, 'Business': 1, 'Eco Plus': 2})
-
-    X_data = X_data.fillna(0)
     X_scaled = scaler.transform(X_data)
 
     model = models[selected_model]
@@ -295,20 +339,13 @@ with tab2:
     })
 
     if has_labels:
-        # Encode y_data for comparison
-        y_data_for_comparison = y_data.copy()
-
         try:
-            # Check if already numeric or string
-            if y_data_for_comparison.dtype == 'object' or y_data_for_comparison.dtype == 'string':
-                # String type - convert to lowercase and check if contains 'satisfied'
-                y_data_for_comparison = y_data_for_comparison.astype(str).str.lower().str.contains('satisfied').astype(int)
-            else:
-                # Already numeric - fill NaN and convert to int
-                y_data_for_comparison = y_data_for_comparison.fillna(0).astype(int)
-
-            results_df['Actual'] = ['Satisfied' if p == 1 else 'Not Satisfied' for p in y_data_for_comparison]
-            results_df['Correct'] = (predictions == y_data_for_comparison)
+            y_data_for_comparison = encode_target(y_data, target_encoder)
+            results_df['Actual'] = [
+                'Satisfied' if label == 1 else 'Not Satisfied'
+                for label in y_data_for_comparison
+            ]
+            results_df['Correct'] = predictions == y_data_for_comparison
         except Exception as e:
             st.warning(f"Could not compare with actual values: {str(e)}")
 
@@ -321,47 +358,24 @@ with tab2:
 with tab3:
     st.header("Confusion Matrix & Classification Report")
 
-    st.info("Confusion Matrix shows how the model made predictions. Accuracy and F1-Score are from Model Performance Metrics tab (same evaluation dataset).")
+    st.info("Confusion Matrix and Classification Report are computed on the currently loaded dataset (default test data or uploaded CSV).")
 
     # Check if we have labels
     if 'satisfaction' in data.columns:
         X_data = data.drop('satisfaction', axis=1)
         y_data = data['satisfaction']
 
-        # Make a copy to avoid modifying original
-        X_data = X_data.copy()
-
-        # Encode categorical variables (same as training)
-        categorical_columns = ['Gender', 'Customer Type', 'Type of Travel', 'Class']
-        for col in categorical_columns:
-            if col in X_data.columns:
-                # Map values using the same mapping as training
-                if col == 'Gender':
-                    X_data[col] = X_data[col].map({'Male': 0, 'Female': 1})
-                elif col == 'Customer Type':
-                    X_data[col] = X_data[col].map({'Loyal Customer': 0, 'disloyal Customer': 1})
-                elif col == 'Type of Travel':
-                    X_data[col] = X_data[col].map({'Personal Travel': 0, 'Business travel': 1})
-                elif col == 'Class':
-                    X_data[col] = X_data[col].map({'Eco': 0, 'Business': 1, 'Eco Plus': 2})
-
-        # Fill any NaN values from encoding
-        X_data = X_data.fillna(0)
-
-        # Encode y_data (actual labels) to match predictions
-        y_data_encoded = y_data.copy()
+        try:
+            X_data = preprocess_features(X_data, label_encoders, feature_columns)
+        except ValueError as e:
+            st.error(str(e))
+            st.stop()
 
         try:
-            # Check if already numeric or string
-            if y_data_encoded.dtype == 'object' or y_data_encoded.dtype == 'string':
-                # String type - convert to lowercase and check if contains 'satisfied'
-                y_data_encoded = y_data_encoded.astype(str).str.lower().str.contains('satisfied').astype(int)
-            else:
-                # Already numeric - fill NaN and convert to int
-                y_data_encoded = y_data_encoded.fillna(0).astype(int)
+            y_data_encoded = encode_target(y_data, target_encoder)
         except Exception as e:
             st.error(f"Error encoding satisfaction column: {str(e)}")
-            st.info("Please ensure the 'satisfaction' column contains either: '0'/'1' or 'Satisfied'/'Neutral or Dissatisfied'")
+            st.info("Please ensure the 'satisfaction' column contains 'satisfied' or 'neutral or dissatisfied' values.")
             st.stop()
 
         # Scale and predict
@@ -438,17 +452,16 @@ with tab3:
             )
             report_df = pd.DataFrame(report).transpose()
 
-            # Display accuracy metric from Model Performance Metrics (same dataset)
-            stored_accuracy = model_metrics['Accuracy']
-            stored_f1 = model_metrics['F1']
+            computed_accuracy = accuracy_score(y_data_encoded, predictions)
+            computed_f1 = f1_score(y_data_encoded, predictions, average='weighted')
 
             col2a, col2b = st.columns([1, 1])
             with col2a:
-                st.metric("Accuracy", f"{stored_accuracy:.2%}")
-                st.caption("From Model Performance Metrics")
+                st.metric("Accuracy", f"{computed_accuracy:.2%}")
+                st.caption("On current dataset")
             with col2b:
-                st.metric("F1-Score", f"{stored_f1:.4f}")
-                st.caption("From Model Performance Metrics")
+                st.metric("F1-Score", f"{computed_f1:.4f}")
+                st.caption("On current dataset")
 
             st.dataframe(report_df, width='stretch')
     else:
@@ -478,15 +491,15 @@ with tab4:
 
     ### Dataset Information
     - **Samples**: 129,880 airline passengers
-    - **Features**: 22 (mix of numerical and categorical)
+    - **Features**: 22 predictive features (mix of numerical and categorical)
     - **Target**: Satisfaction (0 = Not Satisfied, 1 = Satisfied)
     - **Features Include**: Age, Flight Distance, Type of Travel, Cabin Class, etc.
 
     ### Evaluation Metrics
     - **Accuracy**: Overall correctness
     - **AUC Score**: Discriminative ability
-    - **Precision**: False positive rate
-    - **Recall**: False negative rate
+    - **Precision**: Correctness of positive predictions
+    - **Recall**: Ability to find all actual positives
     - **F1 Score**: Balance between precision and recall
     - **MCC**: Correlation coefficient
 

@@ -62,6 +62,12 @@ print("=" * 70)
 df = df.dropna()
 print(f"✓ Missing values removed")
 
+# Drop index/ID columns that are not predictive features
+drop_cols = [col for col in ['Unnamed: 0', 'id'] if col in df.columns]
+if drop_cols:
+    df = df.drop(columns=drop_cols)
+    print(f"✓ Dropped non-feature columns: {drop_cols}")
+
 # Handle categorical variables (convert to numeric)
 label_encoders = {}
 categorical_columns = df.select_dtypes(include=['object']).columns.tolist()
@@ -99,9 +105,12 @@ X_train_scaled = scaler.fit_transform(X_train)
 X_test_scaled = scaler.transform(X_test)
 print(f"✓ Features scaled using StandardScaler")
 
-# Save scaler for later use in Streamlit app
+# Save preprocessing artifacts for Streamlit app
 joblib.dump(scaler, 'model/scaler.pkl')
-print(f"✓ Scaler saved")
+joblib.dump(label_encoders, 'model/label_encoders.pkl')
+joblib.dump(le_target, 'model/label_encoder_target.pkl')
+joblib.dump(list(X.columns), 'model/feature_columns.pkl')
+print(f"✓ Scaler and encoders saved")
 
 # ==============================================================================
 # STEP 3: TRAIN MODELS AND CALCULATE METRICS
@@ -257,12 +266,15 @@ print("\n" + "=" * 70)
 print("STEP 5: Saving Test Data for Streamlit App")
 print("=" * 70)
 
-# Create test data dataframe
-test_df = X_test.copy()
-test_df['satisfaction'] = y_test
+# Save raw test data (string labels) for Streamlit upload demo
+raw_df = pd.concat([train_df, test_df], ignore_index=True).dropna()
+if drop_cols:
+    raw_df = raw_df.drop(columns=drop_cols)
 
-# Save test data (smaller subset for Streamlit)
-test_df_sample = test_df.sample(n=min(1000, len(test_df)), random_state=42)
+_, raw_test = train_test_split(
+    raw_df, test_size=0.2, random_state=42, stratify=raw_df['satisfaction']
+)
+test_df_sample = raw_test.sample(n=min(1000, len(raw_test)), random_state=42)
 test_df_sample.to_csv('test_data.csv', index=False)
 print(f"✓ Test data saved: test_data.csv ({test_df_sample.shape[0]} samples)")
 
